@@ -121,7 +121,7 @@ class BaseBEVDepth(nn.Module):
         """
         return self.head.get_targets(gt_boxes, gt_labels)
 
-    def loss(self, targets, preds_dicts):
+    def loss(self, targets, preds_dicts, z_posteriors, z_priors, radar_mses, camera_nll, s_init):
         """Loss function for BEVDepth.
 
         Args:
@@ -133,7 +133,7 @@ class BaseBEVDepth(nn.Module):
         Returns:
             dict[str:torch.Tensor]: Loss of heatmap and bbox of each task.
         """
-        return self.head.loss(targets, preds_dicts)
+        return self.head.loss(targets, preds_dicts, z_posteriors, z_priors, radar_mses, camera_nll, s_init)
 
     def get_bboxes(self, preds_dicts, img_metas=None, img=None, rescale=False):
         """Generate bboxes from bbox head predictions.

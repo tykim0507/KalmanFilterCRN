@@ -275,7 +275,7 @@ class BEVDepthHead(CenterHead):
             inds.append(ind)
         return heatmaps, anno_boxes, inds, masks
 
-    def loss(self, targets, preds_dicts, **kwargs):
+    def loss(self, targets, preds_dicts, z_posteriors, z_priors, radar_mses, camera_nll, s_init, **kwargs):
         """Loss function for BEVDepthHead.
 
         Args:
@@ -334,4 +334,9 @@ class BEVDepthHead(CenterHead):
             return_loss += loss_heatmap
             return_loss_bbox += loss_bbox
             return_loss_heatmap += loss_heatmap
-        return return_loss, return_loss_heatmap, return_loss_bbox
+
+        radar_recon_loss = sum(radar_mses).mean()
+        camera_recon_loss = camera_nll.mean()
+        obser_kld_loss = sum([(((z_posterior[1]).exp() + (z_posterior[0] - z_prior[0]).square())/(2*(z_prior[1]).exp())).mean() + 0.5*(z_prior[1] - z_posterior[1]).mean() - 1/2 for z_posterior, z_prior in zip(z_posteriors, z_priors)])
+
+        return return_loss + 0.0001 * radar_recon_loss + 0.001 * (camera_recon_loss + obser_kld_loss), return_loss_heatmap, return_loss_bbox

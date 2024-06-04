@@ -92,9 +92,9 @@ class CameraRadarNetDet(BaseBEVDepth):
                                                 ptss_context,
                                                 ptss_occupancy,
                                                 return_depth=True)
-            fused, _ = self.fuser(feats)
+            fused, _, z_posteriors, z_priors, radar_mses, camera_nll, s_init  = self.fuser(feats)
             preds, _ = self.head(fused)
-            return preds, depth
+            return preds, depth, z_posteriors, z_priors, radar_mses, camera_nll, s_init 
         else:
             if self.idx < 100:  # skip few iterations for warmup
                 self.times = None

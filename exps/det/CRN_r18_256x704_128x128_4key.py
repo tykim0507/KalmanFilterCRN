@@ -78,6 +78,7 @@ FPS: 29.38
 """
 import torch
 from utils.torch_dist import synchronize
+import wandb
 
 from exps.base_cli import run_cli
 from exps.base_exp import BEVDepthLightningModel
@@ -278,6 +279,7 @@ class CRNLightningModel(BEVDepthLightningModel):
                                        self.head_conf)
 
     def forward(self, sweep_imgs, mats, is_train=False, **inputs):
+        wandb.watch(self.model, log_freq=10)
         return self.model(sweep_imgs, mats, sweep_ptss=inputs['pts_pv'], is_train=is_train)
 
     def training_step(self, batch):
@@ -295,11 +297,9 @@ class CRNLightningModel(BEVDepthLightningModel):
                 pts_pv = pts_pv.cuda()
             gt_boxes_3d = [gt_box.cuda() for gt_box in gt_boxes_3d]
             gt_labels_3d = [gt_label.cuda() for gt_label in gt_labels_3d]
-        preds, depth_preds = self(sweep_imgs, mats,
-                                  pts_pv=pts_pv,
-                                  is_train=True)
+        preds, depth_preds, z_posteriors, z_priors, radar_mses, camera_nll, s_init = self(sweep_imgs, mats, pts_pv=pts_pv, is_train=True)
         targets = self.model.get_targets(gt_boxes_3d, gt_labels_3d)
-        loss_detection, loss_heatmap, loss_bbox = self.model.loss(targets, preds)
+        loss_detection, loss_heatmap, loss_bbox = self.model.loss(targets, preds, z_posteriors, z_priors, radar_mses, camera_nll, s_init)
 
         if len(depth_labels.shape) == 5:
             # only key-frame will calculate depth loss
@@ -310,6 +310,9 @@ class CRNLightningModel(BEVDepthLightningModel):
         self.log('train/heatmap', loss_heatmap)
         self.log('train/bbox', loss_bbox)
         self.log('train/depth', loss_depth)
+        wandb.log({"loss": loss_detection + loss_depth})
+
+
         return loss_detection + loss_depth
 
     def validation_epoch_end(self, validation_step_outputs):
@@ -356,5 +359,6 @@ class CRNLightningModel(BEVDepthLightningModel):
 
 
 if __name__ == '__main__':
+    wandb.init()
     run_cli(CRNLightningModel,
             'det/CRN_r18_256x704_128x128_4key')

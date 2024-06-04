@@ -296,11 +296,9 @@ class CRNLightningModel(BEVDepthLightningModel):
                 pts_pv = pts_pv.cuda()
             gt_boxes_3d = [gt_box.cuda() for gt_box in gt_boxes_3d]
             gt_labels_3d = [gt_label.cuda() for gt_label in gt_labels_3d]
-        preds, depth_preds = self(sweep_imgs, mats,
-                                  pts_pv=pts_pv,
-                                  is_train=True)
+        preds, depth_preds, z_posteriors, z_priors, radar_mses, camera_nll, s_init = self(sweep_imgs, mats, pts_pv=pts_pv, is_train=True)
         targets = self.model.get_targets(gt_boxes_3d, gt_labels_3d)
-        loss_detection, loss_heatmap, loss_bbox = self.model.loss(targets, preds)
+        loss_detection, loss_heatmap, loss_bbox = self.model.loss(targets, preds, z_posteriors, z_priors, radar_mses, camera_nll, s_init)
 
         if len(depth_labels.shape) == 5:
             # only key-frame will calculate depth loss

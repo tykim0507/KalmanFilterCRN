@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from .kalman_filter import KalmanFuser
 
 from mmcv.runner.base_module import ModuleList
 from mmcv.cnn import build_norm_layer
@@ -7,13 +8,14 @@ from mmcv.cnn.bricks.transformer import build_feedforward_network, build_positio
 from mmcv.runner import auto_fp16
 
 from ..modules.multimodal_deformable_cross_attention import DeformableCrossAttention
-
+#from .kalman_filter import KalmanFuser
 
 class MFAFuser(nn.Module):
     def __init__(self, num_sweeps=4, img_dims=80, pts_dims=128, embed_dims=256,
                  num_layers=6, num_heads=4, bev_shape=(128, 128)):
         super(MFAFuser, self).__init__()
-
+        
+        self.kalman_fuser = KalmanFuser(80, feat2d_dim=128, base_channels=16)
         self.num_modalities = 2
         self.use_cams_embeds = False
 
@@ -40,7 +42,7 @@ class MFAFuser(nn.Module):
             ),
         )
         self.register_buffer('ref_2d', self.get_reference_points(self.bev_h, self.bev_w))
-
+        
         ffn_cfgs = dict(
             type='FFN',
             embed_dims=self.embed_dims,
@@ -142,12 +144,15 @@ class MFAFuser(nn.Module):
         bs = feat_img.shape[0]
         ref_2d_stack = self.ref_2d.repeat(bs, 1, 1, self.num_modalities, 1)
 
-        feat_img = self.norm_img(feat_img.permute(0, 2, 3, 1).contiguous()).permute(0, 3, 1, 2).contiguous()
-        feat_pts = self.norm_pts(feat_pts.permute(0, 2, 3, 1).contiguous()).permute(0, 3, 1, 2).contiguous()
+        feat_img = self.norm_img(feat_img.permute(0, 1, 3, 4, 2).contiguous()).permute(0, 1, 4, 2, 3).contiguous()
+        feat_pts = self.norm_pts(feat_pts.permute(0, 1, 3, 4, 2).contiguous()).permute(0, 1, 4, 2, 3).contiguous()
 
+        # feat_img.shape : [2, 4, 80, 128, 128]
+        # feat_pts.shape : [2, 4, 80, 128, 128]
+        feat_pts, z_posteriors, z_priors, radar_mses, camera_nll, s_init  = self.kalman_fuser(feat_img, feat_pts)
         feat_flatten = []
         spatial_shapes = []
-        for feat in [feat_img, feat_pts]:
+        for feat in [feat_img[:,0], feat_pts]:
             _, _, h, w = feat.shape
             spatial_shape = (h, w)
             feat = feat.flatten(2).permute(0, 2, 1).contiguous()  # [bs, num_cam, c, dw] -> [num_cam, bs, dw, c]
@@ -169,6 +174,7 @@ class MFAFuser(nn.Module):
 
         feat_img = feat_flatten[0]
         feat_pts = feat_flatten[1]
+
         if self.times is not None:
             t2.record()
             torch.cuda.synchronize()
@@ -201,7 +207,7 @@ class MFAFuser(nn.Module):
             torch.cuda.synchronize()
             self.times['fusion_post'].append(t3.elapsed_time(t4))
 
-        return output
+        return output, z_posteriors, z_priors, radar_mses, camera_nll, s_init
 
     def forward(self, feats, times=None):
         self.times = times
@@ -212,24 +218,23 @@ class MFAFuser(nn.Module):
             torch.cuda.synchronize()
 
         num_sweeps = feats.shape[1]
-        key_frame_res = self._forward_single_sweep(
-            feats[:, 0, :self.img_dims],
-            feats[:, 0, self.img_dims:self.img_dims+self.pts_dims]
-        )
+        # key_frame_res = self._forward_single_sweep(
+        #     feats[:, 0, :self.img_dims],
+        #     feats[:, 0, self.img_dims:self.img_dims+self.pts_dims]
+        # )
         if self.times is not None:
             t2.record()
             torch.cuda.synchronize()
             self.times['fusion'].append(t1.elapsed_time(t2))
 
-        if num_sweeps == 1:
-            return key_frame_res, self.times
+        # if num_sweeps == 1:
+        #     return key_frame_res, self.times
 
-        ret_feature_list = [key_frame_res]
-        for sweep_index in range(1, num_sweeps):
-            with torch.no_grad():
-                feature_map = self._forward_single_sweep(
-                    feats[:, sweep_index, :self.img_dims],
-                    feats[:, sweep_index, self.img_dims:self.img_dims+self.pts_dims])
-                ret_feature_list.append(feature_map)
+        # ret_feature_list = [key_frame_res]
+        with torch.no_grad():
+            feature_map, z_posteriors, z_priors, radar_mses, camera_nll, s_init = self._forward_single_sweep(
+                feats[:, :, :self.img_dims],
+                feats[:, :, self.img_dims:self.img_dims+self.pts_dims])
+            ret_feature_list = feature_map
 
-        return self.reduce_conv(torch.cat(ret_feature_list, 1)).float(), self.times
+        return ret_feature_list, self.times, z_posteriors, z_priors, radar_mses, camera_nll, s_init
